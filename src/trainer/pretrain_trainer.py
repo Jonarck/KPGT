@@ -2,6 +2,7 @@ import torch
 import numpy as np
 from sklearn.metrics import f1_score
 class Trainer():
+    # 训练数据组分：smiles_list, batched_graph, fps（fingerprints）, mds（molecular descriptors）, sl_labels, disturbed_fps, disturbed_mds
     def __init__(self, args, optimizer, lr_scheduler, reg_loss_fn, clf_loss_fn, sl_loss_fn, reg_evaluator, clf_evaluator, result_tracker, summary_writer, device, ddp=False, local_rank=1):
         self.args = args
         self.optimizer = optimizer
@@ -25,6 +26,7 @@ class Trainer():
         sl_labels = sl_labels.to(self.device)
         disturbed_fps = disturbed_fps.to(self.device)
         disturbed_mds = disturbed_mds.to(self.device)
+        # 三个预训练任务：sl_predictions、fp_predictions、md_predictions
         sl_predictions, fp_predictions, md_predictions = model(batched_graph, disturbed_fps, disturbed_mds)
         mask_replace_keep = batched_graph.ndata['mask'][batched_graph.ndata['mask']>=1].cpu().numpy()
         return mask_replace_keep, sl_predictions, sl_labels, fp_predictions, fps, disturbed_fps, md_predictions, mds

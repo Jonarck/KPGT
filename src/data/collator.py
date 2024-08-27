@@ -30,6 +30,7 @@ class Collator_pretrain(object):
 
         self.fp_disturb_rate = fp_disturb_rate
         self.md_disturb_rate = md_disturb_rate
+    # 训练任务1的数据生成: 掩藏或替换节点,用于预测
     def bert_mask_nodes(self, g):
         n_nodes = g.number_of_nodes()
         all_ids = np.arange(0, n_nodes, 1, dtype=np.int64)
@@ -69,6 +70,7 @@ class Collator_pretrain(object):
         g.ndata['edge'][replace_ids] = g.ndata['edge'][new_ids].clone()
         g.ndata['vavn'][replace_ids] = g.ndata['vavn'][new_ids].clone()
         return sl_labels
+    # 分子指纹的数据增益：
     def disturb_fp(self, fp):
         fp = deepcopy(fp)
         b, d = fp.shape
@@ -76,6 +78,7 @@ class Collator_pretrain(object):
         disturb_ids = np.random.choice(b*d, int(b*d*self.fp_disturb_rate), replace=False)
         fp[disturb_ids] = 1 - fp[disturb_ids]
         return fp.reshape(b,d)
+    # 分子描述符的数据增益：
     def disturb_md(self, md):
         md = deepcopy(md)
         b, d = md.shape
@@ -95,9 +98,23 @@ class Collator_pretrain(object):
         mds = torch.stack(mds, dim=0).reshape(len(smiles_list),-1)
         fps = torch.stack(fps, dim=0).reshape(len(smiles_list),-1)
         batched_graph.edata['path'][:, :] = preprocess_batch_light(batched_graph.batch_num_nodes(), batched_graph.batch_num_edges(), batched_graph.edata['path'][:, :])
-        sl_labels = self.bert_mask_nodes(batched_graph)
-        disturbed_fps = self.disturb_fp(fps)
-        disturbed_mds = self.disturb_md(mds)
+        sl_labels = self.bert_mask_nodes(batched_graph) # 被掩蔽或替换节点的原始标签
+        disturbed_fps = self.disturb_fp(fps) # 修改后的分子指纹
+        disturbed_mds = self.disturb_md(mds) # 修改后的分子描述符
+
+        '''
+        ---------------------------------------------
+        smiles_list
+        ----------------------------------------------
+        batched_graph：一批【分子线图】
+        fps：一批【分子指纹】
+        mds：一批【分子描述符】
+        ----------------------------------------------
+        sl_labels：一批【被掩蔽或替换节点的原始标签】
+        disturbed_fps：一批【修改后的分子指纹】
+        disturbed_mds：一批【修改后的分子描述符】
+        ---------------------------------------------
+        '''
         return smiles_list, batched_graph, fps, mds, sl_labels, disturbed_fps, disturbed_mds
 
 class Collator_tune(object):

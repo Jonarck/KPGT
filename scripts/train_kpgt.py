@@ -55,6 +55,7 @@ if __name__ == '__main__':
     
     vocab = Vocab(N_ATOM_TYPES, N_BOND_TYPES)
     collator = Collator_pretrain(vocab, max_length=config['path_length'], n_virtual_nodes=2, candi_rate=config['candi_rate'], fp_disturb_rate=config['fp_disturb_rate'], md_disturb_rate=config['md_disturb_rate'])
+    # collator返回一个batch的：smiles_list, batched_graph, fps, mds, sl_labels, disturbed_fps, disturbed_mds
     train_dataset = MoleculeDataset(root_path=args.data_path)
     train_loader = DataLoader(train_dataset, sampler=DistributedSampler(train_dataset), batch_size=config['batch_size']// args.n_devices, num_workers=args.n_threads, worker_init_fn=seed_worker, drop_last=True, collate_fn=collator)
     model = LiGhT(
@@ -76,8 +77,10 @@ if __name__ == '__main__':
     model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[local_rank], output_device=local_rank, find_unused_parameters=True)
     optimizer = Adam(model.parameters(), lr=config['lr'], weight_decay=config['weight_decay'])
     lr_scheduler = PolynomialDecayLR(optimizer, warmup_updates=20000, tot_updates=200000,lr=config['lr'], end_lr=1e-9,power=1)
+    
     reg_loss_fn = MSELoss(reduction='none')
     clf_loss_fn = BCEWithLogitsLoss(weight=train_dataset._task_pos_weights.to(device),reduction='none')
+    # sl：预测被掩蔽或替换节点的标签
     sl_loss_fn = CrossEntropyLoss(reduction='none')
     reg_metric, clf_metric = "r2", "rocauc_resp"
     reg_evaluator = Evaluator("chembl29", reg_metric, train_dataset.d_mds)
