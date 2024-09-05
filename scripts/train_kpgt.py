@@ -16,7 +16,7 @@ import random
 from src.data.featurizer import Vocab, N_BOND_TYPES, N_ATOM_TYPES
 from src.data.pretrain_dataset import MoleculeDataset
 from src.data.collator import Collator_pretrain
-from src.model.light import LiGhTPredictor as LiGhT
+from src.model.light import LiGhTPredictor as LiGhT # 逆天
 from src.trainer.scheduler import PolynomialDecayLR
 from src.trainer.pretrain_trainer import Trainer
 from src.trainer.evaluator import Evaluator
@@ -53,11 +53,24 @@ if __name__ == '__main__':
     print(local_rank)
     val_results, test_results, train_results = [], [], []
     
+    # 数据
     vocab = Vocab(N_ATOM_TYPES, N_BOND_TYPES)
-    collator = Collator_pretrain(vocab, max_length=config['path_length'], n_virtual_nodes=2, candi_rate=config['candi_rate'], fp_disturb_rate=config['fp_disturb_rate'], md_disturb_rate=config['md_disturb_rate'])
-    # collator返回一个batch的：smiles_list, batched_graph, fps, mds, sl_labels, disturbed_fps, disturbed_mds
+    collator = Collator_pretrain(vocab, 
+                                    max_length=config['path_length'], 
+                                    n_virtual_nodes=2, 
+                                    candi_rate=config['candi_rate'], 
+                                    fp_disturb_rate=config['fp_disturb_rate'], 
+                                    md_disturb_rate=config['md_disturb_rate'])
     train_dataset = MoleculeDataset(root_path=args.data_path)
-    train_loader = DataLoader(train_dataset, sampler=DistributedSampler(train_dataset), batch_size=config['batch_size']// args.n_devices, num_workers=args.n_threads, worker_init_fn=seed_worker, drop_last=True, collate_fn=collator)
+    train_loader = DataLoader(train_dataset, 
+                                sampler=DistributedSampler(train_dataset), 
+                                batch_size=config['batch_size']// args.n_devices, 
+                                num_workers=args.n_threads, 
+                                worker_init_fn=seed_worker, 
+                                drop_last=True, 
+                                collate_fn=collator)
+    
+    # 模型：
     model = LiGhT(
         d_node_feats=config['d_node_feats'],
         d_edge_feats=config['d_edge_feats'],
@@ -74,15 +87,23 @@ if __name__ == '__main__':
         feat_drop=config['feat_drop'],
         n_node_types=vocab.vocab_size
     ).to(device)
+
     model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[local_rank], output_device=local_rank, find_unused_parameters=True)
+    
+    # 训练：
     optimizer = Adam(model.parameters(), lr=config['lr'], weight_decay=config['weight_decay'])
+    
     lr_scheduler = PolynomialDecayLR(optimizer, warmup_updates=20000, tot_updates=200000,lr=config['lr'], end_lr=1e-9,power=1)
     
+    # 自监督训练任务2的损失函数
     reg_loss_fn = MSELoss(reduction='none')
     clf_loss_fn = BCEWithLogitsLoss(weight=train_dataset._task_pos_weights.to(device),reduction='none')
-    # sl：预测被掩蔽或替换节点的标签
+    # 自监督训练任务1的损失函数
     sl_loss_fn = CrossEntropyLoss(reduction='none')
+    
     reg_metric, clf_metric = "r2", "rocauc_resp"
+
+    # 测试
     reg_evaluator = Evaluator("chembl29", reg_metric, train_dataset.d_mds)
     clf_evaluator = Evaluator("chembl29", clf_metric, train_dataset.d_fps)
     result_tracker = Result_Tracker(reg_metric)

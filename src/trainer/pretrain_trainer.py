@@ -2,7 +2,16 @@ import torch
 import numpy as np
 from sklearn.metrics import f1_score
 class Trainer():
-    # 训练数据组分：smiles_list, batched_graph, fps（fingerprints）, mds（molecular descriptors）, sl_labels, disturbed_fps, disturbed_mds
+    '''
+    smiles_list
+    batched_graph
+    fps（fingerprints）
+    mds（molecular descriptors）
+    sl_labels
+    disturbed_fps
+    disturbed_mds
+    '''
+    # 训练数据组分：
     def __init__(self, args, optimizer, lr_scheduler, reg_loss_fn, clf_loss_fn, sl_loss_fn, reg_evaluator, clf_evaluator, result_tracker, summary_writer, device, ddp=False, local_rank=1):
         self.args = args
         self.optimizer = optimizer
@@ -18,16 +27,20 @@ class Trainer():
         self.ddp = ddp
         self.local_rank = local_rank
         self.n_updates = 0
+    
     def _forward_epoch(self, model, batched_data):
         (smiles, batched_graph, fps, mds, sl_labels, disturbed_fps, disturbed_mds) = batched_data
         batched_graph = batched_graph.to(self.device)
         fps = fps.to(self.device)
         mds = mds.to(self.device)
+
         sl_labels = sl_labels.to(self.device)
         disturbed_fps = disturbed_fps.to(self.device)
         disturbed_mds = disturbed_mds.to(self.device)
+
         # 三个预训练任务：sl_predictions、fp_predictions、md_predictions
-        sl_predictions, fp_predictions, md_predictions = model(batched_graph, disturbed_fps, disturbed_mds)
+        sl_predictions, fp_predictions, md_predictions = model(batched_graph, disturbed_fps, disturbed_mds) # 调用LiGhT Predictor的前传函数
+
         mask_replace_keep = batched_graph.ndata['mask'][batched_graph.ndata['mask']>=1].cpu().numpy()
         return mask_replace_keep, sl_predictions, sl_labels, fp_predictions, fps, disturbed_fps, md_predictions, mds
     
@@ -36,7 +49,18 @@ class Trainer():
         for batch_idx, batched_data in enumerate(train_loader):
             try:
                 self.optimizer.zero_grad()
-                mask_replace_keep, sl_predictions, sl_labels, fp_predictions, fps, disturbed_fps, md_predictions, mds = self._forward_epoch(model, batched_data)
+                '''
+                mask_replace_keep
+                sl_predictions
+                sl_labels
+                fp_predictions
+                fps
+                disturbed_fps
+                md_predictions
+                mds
+                '''
+                # train_epoch()调用_forward_epoch()
+                mask_replace_keep, sl_predictions, sl_labels, fp_predictions, fps, disturbed_fps, md_predictions, mds = self._forward_epoch(model, batched_data) # 调用_forward_epoch
                 sl_loss = self.sl_loss_fn(sl_predictions, sl_labels).mean()
                 fp_loss = self.clf_loss_fn(fp_predictions, fps).mean()
                 md_loss = self.reg_loss_fn(md_predictions, mds).mean()
@@ -52,6 +76,7 @@ class Trainer():
                     loss_keep = self.sl_loss_fn(sl_predictions.detach().cpu()[mask_replace_keep==3],sl_labels.detach().cpu()[mask_replace_keep==3]).mean()
                     preds = np.argmax(sl_predictions.detach().cpu().numpy(),axis=-1)
                     labels = sl_labels.detach().cpu().numpy()
+
                     self.summary_writer.add_scalar('Loss/loss_tot', loss.item(), self.n_updates)
                     self.summary_writer.add_scalar('Loss/loss_bert', sl_loss.item(), self.n_updates)
                     self.summary_writer.add_scalar('Loss/loss_mask', loss_mask.item(), self.n_updates)
@@ -84,7 +109,7 @@ class Trainer():
             model.train()
             if self.ddp:
                 train_loader.sampler.set_epoch(epoch)
-            self.train_epoch(model, train_loader, epoch)
+            self.train_epoch(model, train_loader, epoch) # fit调用train_epoch
             if self.n_updates >= self.args.n_steps:
                 break
 

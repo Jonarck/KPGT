@@ -33,7 +33,7 @@ atom_featurizer_all = ConcatFeaturizer([ # 137
     atom_mass, # 1
     ])
 
-
+# 词典构建
 class Vocab(object):
     def __init__(self, n_atom_types, n_bond_types):
         self.n_atom_types = n_atom_types
@@ -74,8 +74,10 @@ class Vocab(object):
         bond_type = bond_type_one_hot.index(1)
         return self.index([atom_type1, bond_type, atom_type2])
 
+
+# 分子图对象化
 def smiles_to_graph(smiles, vocab, max_length=5, n_virtual_nodes=8, add_self_loop=True):    
-# 针对【一个分子】处理
+    # 针对【一个分子】处理
     # 通过 SMILES 字符串生成分子对象
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:
@@ -98,8 +100,8 @@ def smiles_to_graph(smiles, vocab, max_length=5, n_virtual_nodes=8, add_self_loo
         atom = mol.GetAtomWithIdx(atom_id)
         atom_features.append(atom_featurizer_all(atom))
 
-# 分割算法 —— 构建线图
-# 1. 线图的节点的构建
+    # 分割算法 —— 构建线图
+    # 1. 线图的节点的构建
     # 初始化一个用于存储原子对到三元组 ID 的映射
     atomIDPair_to_tripletId = np.ones(shape=(n_atoms,n_atoms))*np.nan
     
@@ -163,14 +165,14 @@ def smiles_to_graph(smiles, vocab, max_length=5, n_virtual_nodes=8, add_self_loo
     virt1ual_atom_and_virtual_node_labels
     '''
     for atom_id in range(n_atoms):
-        if atom_id not in bonded_atoms:
+        if atom_id not in bonded_atoms: # 【实+虚】三元组节点
             # 添加虚拟原子特征和虚拟键特征
             atom_pairs_features_in_triplets.append([atom_features[atom_id], [VIRTUAL_ATOM_FEATURE_PLACEHOLDER]*d_atom_feats])
             bond_features_in_triplets.append([VIRTUAL_BOND_FEATURE_PLACEHOLDER]*d_bond_feats)
             triplet_labels.append(vocab.index(atom_features[atom_id][:N_ATOM_TYPES].index(1), 999, 999))
             virtual_atom_and_virtual_node_labels.append(VIRTUAL_ATOM_INDICATOR)
 
-# 2. 线图的边和路径构建
+    # 2. 线图的边和路径构建
     # 构建三元组之间的边和路径
     edges = []  # 用于存储边
     paths = []  # 用于存储路径
@@ -179,7 +181,7 @@ def smiles_to_graph(smiles, vocab, max_length=5, n_virtual_nodes=8, add_self_loo
     virtual_path_labels = []  # 虚拟路径bool标签
     self_loop_labels = []  # 自环路径bool标签
     
-# 2.1 构建线图的【原始边】+ 生成【第一类线图路径】
+    # 2.1 构建线图的【原始边】+ 生成【第一类线图路径】
     for i in range(n_atoms):
         node_ids = atomIDPair_to_tripletId[i] # 该原子1涉及的所有三元组节点的【分子内索引的列表】
         node_ids = node_ids[~np.isnan(node_ids)]  # 过滤掉 NaN 值
@@ -203,7 +205,7 @@ def smiles_to_graph(smiles, vocab, max_length=5, n_virtual_nodes=8, add_self_loo
             virtual_path_labels.extend([0]*n_new_edges)
             self_loop_labels.extend([0]*n_new_edges)
     
-# 2.2 生成【第二类线图路径】+ 构建线图的【长路径头尾直连边】
+    # 2.2 生成【第二类线图路径】+ 构建线图的【长路径头尾直连边】
     # 获取分子图中所有原子节点的最短路径
     adj_matrix = np.array(Chem.rdmolops.GetAdjacencyMatrix(mol))
     nx_g = nx.from_numpy_array(adj_matrix)
@@ -232,7 +234,7 @@ def smiles_to_graph(smiles, vocab, max_length=5, n_virtual_nodes=8, add_self_loo
                 virtual_path_labels.append(0) 
                 self_loop_labels.append(0)
     
-# 2.3 生成【第三类线图路径】+更新【虚节点的特征情况】+构建线图的【虚实相关边】
+    # 2.3 生成【第三类线图路径】+更新【虚节点的特征情况】+构建线图的【虚实相关边】
     for n in range(n_virtual_nodes): # 遍历每一个【虚节点】（默认有8个）
         for i in range(len(atom_pairs_features_in_triplets)-n): # 对每一个【实节点】
             
@@ -250,17 +252,19 @@ def smiles_to_graph(smiles, vocab, max_length=5, n_virtual_nodes=8, add_self_loo
             virtual_path_labels.extend([n+1, n+1])
             self_loop_labels.extend([0,0])
         
-        # 
-        # 顺便更新atom_pairs_features_in_triplets列表大小
+        # 添加新的虚原子（建立虚原子与虚原子的三元组特征）
         atom_pairs_features_in_triplets.append([[VIRTUAL_ATOM_FEATURE_PLACEHOLDER]*d_atom_feats, [VIRTUAL_ATOM_FEATURE_PLACEHOLDER]*d_atom_feats])
 
+        # 键特征
         bond_features_in_triplets.append([VIRTUAL_BOND_FEATURE_PLACEHOLDER]*d_bond_feats)
         
+        # 三元组标签
         triplet_labels.append(vocab.index(999, 999, 999))
         
+        # 虚拟节点的具体类型
         virtual_atom_and_virtual_node_labels.append(n+1)
     
-# 2.4 生成【第四类线图路径】 + 添加线图的【自环边】
+    # 2.4 生成【第四类线图路径】 + 添加线图的【自环边】
     if add_self_loop:
         for i in range(len(atom_pairs_features_in_triplets)):
             edges.append([i, i])
@@ -270,17 +274,19 @@ def smiles_to_graph(smiles, vocab, max_length=5, n_virtual_nodes=8, add_self_loo
             virtual_path_labels.append(0)
             self_loop_labels.append(1)
 
-# 3. DGL化：    
+    # 3. DGL化：    
     # 创建 DGL 图
     edges = np.array(edges, dtype=np.int64)
-    data = (edges[:,0], edges[:,1])
+    data = (edges[:,0], edges[:,1]) #([所有起点],[所有终点])
     g = dgl.graph(data)
-    
-    # 设置图的节点和边的特征
+
+    # 节点的内部原子特征
     g.ndata['begin_end'] = torch.FloatTensor(atom_pairs_features_in_triplets)
+    # 节点的内部键特征
     g.ndata['edge'] = torch.FloatTensor(bond_features_in_triplets)
+    # 节点的vocab索引标签
     g.ndata['label'] = torch.LongTensor(triplet_labels)
-    # 虚拟节点及其标签
+    # 节点的虚实类型标记
     g.ndata['vavn'] = torch.LongTensor(virtual_atom_and_virtual_node_labels)
     # 路径
     g.edata['path'] = torch.LongTensor(paths)
@@ -291,9 +297,6 @@ def smiles_to_graph(smiles, vocab, max_length=5, n_virtual_nodes=8, add_self_loo
     g.edata['sl'] = torch.BoolTensor(self_loop_labels)
     
     return g  # 返回创建的图对象
-
-
-
 
 def smiles_to_graph_tune(smiles, max_length=5, n_virtual_nodes=8, add_self_loop=True):
     d_atom_feats = 137
