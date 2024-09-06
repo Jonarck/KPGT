@@ -133,18 +133,24 @@ class TripletTransformer(nn.Module):
                 attn_drop=0.,
                 activation=nn.GELU()):
         super(TripletTransformer, self).__init__()
+        # 超参数设置
         self.d_feats = d_feats
         self.d_trip_path = d_feats//d_hpath_ratio
         self.path_length = path_length
         self.n_heads = n_heads
+        '''
+        对于参数矩阵 Query, Key, Value 而言，【多头注意力切分】并没有物理切分成对应于每个注意力头的独立矩阵，仅逻辑上每个注意力头对应于 Query, Key, Value 的独立一部分。同样，各注意力头没有单独的线性层，而是所有的注意力头共用线性层，只是不同的注意力头在独属于其的逻辑部分上进行操作。
+        '''
         self.scale = d_feats**(-0.5)
 
-        self.attention_norm = nn.LayerNorm(d_feats)
-        self.qkv = nn.Linear(d_feats, d_feats*3)
-        self.node_out_layer = Residual(d_feats, d_feats, n_ffn_dense_layers, feat_drop,  activation)
+        # 网络结构设置
+        self.attention_norm = nn.LayerNorm(d_feats) # Embedding归一化
+        self.qkv = nn.Linear(d_feats, d_feats*3) 
+        # KQV矩阵生成器【Q-K-V横向联排大矩阵】
+        self.node_out_layer = Residual(d_feats, d_feats, n_ffn_dense_layers, feat_drop,  activation) # 特征输出
         
-        self.feat_dropout = nn.Dropout(p=feat_drop)
-        self.attn_dropout = nn.Dropout(p=attn_drop)
+        self.feat_dropout = nn.Dropout(p=feat_drop) # 特征dropout
+        self.attn_dropout = nn.Dropout(p=attn_drop) # 注意力dropout
         self.act = activation
 
     def pretrans_edges(self, edges):
@@ -152,23 +158,35 @@ class TripletTransformer(nn.Module):
         return {"he": edge_h}
 
     def forward(self, g, triplet_h, dist_attn, path_attn):
-        # 输入：图的整体DGL Graph对象；LiGhTPredictor前序步骤处理的triplet_h特征；LiGhTPredictor前序步骤处理的距离编码注意力dist_attn和路径编码注意力path_attn
+        '''
+        - 输入：
+        1）图的整体DGL Graph对象：用于将消息传递过程中的中间变量存储到边的属性词典g.edata和节点的属性词典g.ndata中
+        2）LiGhTPredictor前序步骤处理的triplet_h特征：Transformer处理的主体序列
+        3）LiGhTPredictor前序步骤处理的距离编码注意力dist_attn和路径编码注意力path_attn：引入图的更多拓扑信息
+        - 结果：
+        1）更新了图的边属性：g.edata['he']
+        2）
+        '''
         g = g.local_var()
 
-        # 1. 注意力要素计算：
+        # 1. 用【triplet_h】计算注意力要素：
         # 1）triplet_h特征归一化
         new_triplet_h = self.attention_norm(triplet_h)
         # 2）qkv调用一个Linear模型。计算new_triplet_h的qkv
+        """
+        经由线性层输出的 Q、K 和 V 矩阵要经过 Reshape 操作，以体现出一个明显的Head(querySize: partial-embSize)维度（以前的明显维度是Seq）。现在每个 "切片 "对应于每个头的一个矩阵。是得到 Q、K、V之后，在用 Q、K 计算 attention score之前才划分的多头。
+        """
         qkv = self.qkv(new_triplet_h).reshape(-1, 3, self.n_heads, self.d_feats // self.n_heads).permute(1, 0, 2, 3)
-        # 3）计算得到注意力要素——分别获取q, k, v
+        # 【Q-K-V横向联排大矩阵】切分为q矩阵、k矩阵和v矩阵
         q, k, v = qkv[0]*self.scale, qkv[1], qkv[2]
         
         # 2. 将注意力信息赋予到图上
-        # 1）赋予节点注意力信息：为目标节点赋予K属性，为源节点赋予Q属性
+        # 1）赋予节点【全图的】注意力信息：为目标节点赋予K属性，为源节点赋予Q属性
         g.srcdata.update({'Q': q}) # 所有 源节点 赋予q
         g.dstdata.update({'K': k}) # 所有 目标节点 赋予k
         # 2）赋予边的注意力信息：
-        # ① 逐边赋予边的node_attn属性
+        # ① 逐边计算源节点Q和目标节点K的矩阵乘积（即：【图的注意力分数】）→赋予边的node_attn属性
+        '''通过使用源节点Q和目标节点K的点积来计算注意力分数，模型可以评估源节点和目标节点之间的相似性或相关性。这样的机制帮助模型确定在信息传递过程中哪些连接是重要的，即源节点应该从哪些目标节点获取更多信息。'''
         g.apply_edges(fn.u_dot_v('Q', 'K', 'node_attn'))  # 边上的注意力系数
         # ② 为边的注意力信息引入关联性编码，为边赋予合成注意力信息：节点特征注意力+距离编码注意力+路径编码注意力
         g.edata['a'] = g.edata['node_attn'] + dist_attn.reshape(len(g.edata['node_attn']),-1,1) + path_attn.reshape(len(g.edata['node_attn']),-1,1)
@@ -184,10 +202,10 @@ class TripletTransformer(nn.Module):
         
         # 4. 消息传递的最终实现：massage_func——fn.copy_e ; reduce_func——sum
         # 1）消息构建：将g.edata['he']作为消息
-        # 2）消息聚合：将消息加到节点的【agg_h】特征上
+        # 2）消息聚合：将消息加到节点的【agg_h】特征上，
         g.update_all(fn.copy_e('he', 'm'), fn.sum('m', 'agg_h'))
 
-        # 将triplet_h和聚合的消息输入残差块
+        # 5. 将triplet_h和聚合的消息输入残差块
         return self.node_out_layer(triplet_h, g.ndata['agg_h'])
 
     def _device(self):
